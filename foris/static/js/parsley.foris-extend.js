@@ -3,9 +3,6 @@ window.ParsleyValidator
         var byteLength = encodeURI(value).replace(/%../g, "?").length;
         return byteLength >= arrayRange[0] && byteLength <= arrayRange[1];
       }, 32)
-    .addMessage('cs', 'bytelength', "Tato položka musí mít délku od %s do %s znaků.")
-    .addMessage('de', 'bytelength', "Die Länge des Eingabewerts muss zwischen %s bis %s Zeichen sein.")
-    .addMessage('en', 'bytelength', "This value length is invalid. It should be between %s and %s characters long.")
     .addValidator('extratype', function( val, type ) {
         var regExp;
         var isIPv4 = function(val) {
@@ -45,6 +42,14 @@ window.ParsleyValidator
           }
           return true;
         };
+        var isIPv4Prefix = function(val) {
+            var splitVal = val.split("/");
+            if (splitVal.length != 2) return false;
+            if (!splitVal[1].match(/^\d+$/)) return false;
+            var prefix = parseInt(splitVal[1], 10);
+            if (!isIPv4(splitVal[0]) || prefix < 0 || prefix > 32) return false;
+            return true;
+        };
         switch (type) {
           case 'ipv4':
             return isIPv4(val);
@@ -53,6 +58,9 @@ window.ParsleyValidator
           case 'anyip':
             if (isIPv4(val))
               return true;
+          case 'ipv4prefix':
+            if (isIPv4Prefix(val))
+                return true;
             // else fall through to ipv6
           case 'ipv6':
             // source: http://home.deds.nl/~aeron/regex/
@@ -76,31 +84,7 @@ window.ParsleyValidator
         }
 
         return val !== '' ? regExp.test(val) : false;
-    }, 32)
-    .addMessage('cs', 'extratype', {
-      ipv4: "Toto není platná IPv4 adresa.",
-      ipv4netmask: "Toto není platná IPv4 síťová maska.",
-      ipv6: "Toto není platná IPv6 adresa.",
-      anyip: "Toto není platná IPv4 nebo IPv6 adresa.",
-      ipv6prefix: "Toto není IPv6 adresa s délkou prefixu.",
-      macaddress: "Toto není platná MAC adresa."
-    })
-    .addMessage('de', 'extratype', {
-      ipv4: "Dies ist keine gültige IPv4-Adresse.",
-      ipv4netmask: "Dies ist keine gültige IPv4-Netzmaske.",
-      ipv6: "Dies ist keine gültige IPv6-Adresse.",
-      anyip: "Dies ist keine gültige IPv4- oder IPv6-Adresse.",
-      ipv6prefix: "Dies ist keine IPv6-Adresse mit einer Präfixlänge.",
-      macaddress: "Dies ist keine gültige MAC-Adresse."
-    })
-    .addMessage('en', 'extratype', {
-      ipv4: "This is not a valid IPv4 address.",
-      ipv4netmask: "This is not a valid IPv4 netmask.",
-      ipv6: "This is not an IPv6 address with prefix length.",
-      anyip: "This is not a valid IPv4 or IPv6 address.",
-      ipv6prefix: "This is not a valid IPv6 prefix.",
-      macaddress: "This is not a valid MAC address."
-    });
+    }, 32);
 
 // patch method for getting error messages so it can get extratype messages from object structure
 window.ParsleyValidator.getErrorMessage = function(constraint) {

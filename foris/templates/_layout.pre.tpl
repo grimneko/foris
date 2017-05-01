@@ -26,7 +26,7 @@
     <![endif]-->
     %if defined('PLUGIN_STYLES') and PLUGIN_STYLES:
       %for static_filename in PLUGIN_STYLES:
-        <link href="{{ "/plugins/" + PLUGIN_NAME }}{{ static(static_filename) }}" rel="stylesheet" media="screen">
+        <link href="{{ static("plugins/%s/%s" % (PLUGIN_NAME, static_filename)) }}" rel="stylesheet" media="screen">
       %end
     %end
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -34,9 +34,17 @@
     <script src="{{ static("js/contrib/parsley.min.js") }}"></script>
     <script src="{{ static("js/parsley.foris-extend.min.js") }}?md5=MD5SUM"></script>
     <script src="{{ static("js/foris.min.js") }}?md5=MD5SUM"></script>
-    %if lang() != 'en':
-        <script src="{{ static("js/parsley.messages.%s.min.js" % lang()) }}?md5=MD5SUM"></script>
-        <script src="{{ static("js/foris.%s.min.js" % lang()) }}?md5=MD5SUM"></script>
+    <script src="{{ url("render_js", filename="foris.js") }}?md5={{ js_md5('foris.js') }}"></script>
+    <script src="{{ url("render_js", filename="parsley.messages.js") }}?md5={{ js_md5('parsley.messages.js') }}"></script>
+    %if defined('PLUGIN_STATIC_SCRIPTS') and PLUGIN_STATIC_SCRIPTS:
+      %for static_filename in PLUGIN_STATIC_SCRIPTS:
+        <script src="{{ static("plugins/%s/%s" % (PLUGIN_NAME, static_filename)) }}"></script>
+      %end
+    %end
+    %if defined('PLUGIN_DYNAMIC_SCRIPTS') and PLUGIN_DYNAMIC_SCRIPTS:
+      %for filename in PLUGIN_DYNAMIC_SCRIPTS:
+        <script src="{{ url("render_js", filename=PLUGIN_NAME + "/" + filename) }}?md5={{ js_md5(PLUGIN_NAME + "/" + filename) }}"></script>
+      %end
     %end
 </head>
 <body>

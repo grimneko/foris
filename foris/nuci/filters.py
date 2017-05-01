@@ -42,4 +42,39 @@ def create_config_filter(*args):
     return _uci.get_xml()
 
 
+def create_uci_filter(config, section=None, option=None):
+    uci_et = ET.Element(uci_raw.Uci.qual_tag(uci_raw.Uci.tag))
+    config_et = ET.SubElement(uci_et, uci_raw.Uci.qual_tag("config"))
+    ET.SubElement(config_et, uci_raw.Uci.qual_tag("name")).text = config
+    if section:
+        section_et = ET.SubElement(config_et, uci_raw.Uci.qual_tag("section"))
+        ET.SubElement(section_et, uci_raw.Uci.qual_tag("name")).text = section
+        if option:
+            option_et = ET.SubElement(section_et, uci_raw.Uci.qual_tag("option"))
+            ET.SubElement(option_et, uci_raw.Uci.qual_tag("name")).text = option
+
+    return uci_et
+
+
+def wifi_filter():
+
+    uci = uci_raw.Uci()
+
+    wireless_conf = uci_raw.Config("wireless")
+    uci.add(wireless_conf)
+
+    network_conf = uci_raw.Config("network")
+    uci.add(network_conf)
+    network_conf.add(uci_raw.Section("guest_turris", "interface"))
+
+    firewall_conf = uci_raw.Config("firewall")
+    uci.add(firewall_conf)  # get the whole firewall config - unable to filter
+
+    dhcp_conf = uci_raw.Config("dhcp")
+    uci.add(dhcp_conf)
+    dhcp_conf.add(uci_raw.Section("guest_turris", "dhcp"))
+
+    return uci.get_xml()
+
+
 foris_config = create_config_filter("foris")

@@ -14,7 +14,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-from collections import OrderedDict
 from datetime import datetime
 import os
 import logging
@@ -23,14 +22,12 @@ from urlparse import urlunsplit
 from bottle import Bottle, request, template
 import bottle
 
-from . import DEVICE_CUSTOMIZATION
 from .core import gettext_dummy as gettext, make_notification_title, ugettext as _
 from .config_handlers import *
 from .nuci import client
 from .nuci.client import filters
 from .nuci.exceptions import ConfigRestoreError
-from .utils import login_required
-from .utils import messages, require_customization
+from .utils import login_required, messages, require_contract_valid, contract_valid
 from .utils.bottle_csrf import CSRFPlugin
 from .utils.routing import reverse
 
@@ -38,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 
 class ConfigPageMixin(object):
+    menu_order = 50
     template = "config/main"
 
     def call_action(self, action):
@@ -87,6 +85,8 @@ class ConfigPageMixin(object):
 
 
 class PasswordConfigPage(ConfigPageMixin, PasswordHandler):
+    menu_order = 11
+
     def __init__(self, *args, **kwargs):
         super(PasswordConfigPage, self).__init__(change=True, *args, **kwargs)
 
@@ -103,6 +103,8 @@ class PasswordConfigPage(ConfigPageMixin, PasswordHandler):
 
 
 class WanConfigPage(ConfigPageMixin, WanHandler):
+    menu_order = 12
+
     def render(self, **kwargs):
         stats = client.get(filter=filters.stats).find_child("stats")
         wan_if = stats.data['interfaces'].get(self.wan_ifname)
@@ -112,6 +114,8 @@ class WanConfigPage(ConfigPageMixin, WanHandler):
 
 
 class DNSConfigPage(ConfigPageMixin, DNSHandler):
+    menu_order = 13
+
     template = "config/dns"
 
     def _action_check_connection(self):
@@ -125,18 +129,26 @@ class DNSConfigPage(ConfigPageMixin, DNSHandler):
 
 
 class LanConfigPage(ConfigPageMixin, LanHandler):
+    menu_order = 14
+
     pass
 
 
 class WifiConfigPage(ConfigPageMixin, WifiHandler):
+    menu_order = 15
+
     template = "config/wifi"
 
 
 class SystemPasswordConfigPage(ConfigPageMixin, SystemPasswordHandler):
+    menu_order = 16
+
     pass
 
 
 class MaintenanceConfigPage(ConfigPageMixin, MaintenanceHandler):
+    menu_order = 17
+
     template = "config/maintenance"
     userfriendly_title = gettext("Maintenance")
 
@@ -226,9 +238,11 @@ class MaintenanceConfigPage(ConfigPageMixin, MaintenanceHandler):
 
 
 class UpdaterConfigPage(ConfigPageMixin, UpdaterHandler):
+    menu_order = 18
+
     template = "config/updater"
 
-    @require_customization("omnia")
+    @require_contract_valid(False)
     def _action_toggle_updater(self):
         if bottle.request.method != 'POST':
             messages.error(_("Wrong HTTP method."))
@@ -246,7 +260,7 @@ class UpdaterConfigPage(ConfigPageMixin, UpdaterHandler):
         raise ValueError("Unknown action.")
 
     def render(self, **kwargs):
-        if DEVICE_CUSTOMIZATION == "omnia":
+        if not contract_valid():
             eula_handler = UpdaterEulaHandler(self.data)
             kwargs['updater_eula_form'] = eula_handler.form
             agreed_opt = eula_handler.form.nuci_config.find_child('uci.foris.eula.agreed_updater')
@@ -266,12 +280,14 @@ class UpdaterConfigPage(ConfigPageMixin, UpdaterHandler):
 
 
 class DataCollectionConfigPage(ConfigPageMixin, UcollectHandler):
+    menu_order = 19
+
     template = "config/data-collection"
     userfriendly_title = gettext("Data collection")
 
     def render(self, **kwargs):
         status = kwargs.pop("status", None)
-        if DEVICE_CUSTOMIZATION == "omnia":
+        if not contract_valid():
             uci_config = client.get(filter=filters.create_config_filter("foris", "updater"))
 
             disabled_opt = uci_config.find_child('uci.updater.override.disable')
@@ -292,7 +308,7 @@ class DataCollectionConfigPage(ConfigPageMixin, UcollectHandler):
                                      description=None, status=status,
                                      **kwargs)
 
-    @require_customization("omnia")
+    @require_contract_valid(False)
     def _action_check_registration(self):
         handler = RegistrationCheckHandler(request.POST)
         if not handler.save():
@@ -331,7 +347,7 @@ class DataCollectionConfigPage(ConfigPageMixin, UcollectHandler):
                            registration_url=response.url,
                            reg_num=response.reg_num, **kwargs)
 
-    @require_customization("omnia")
+    @require_contract_valid(False)
     def _action_toggle_collecting(self):
         if bottle.request.method != 'POST':
             messages.error(_("Wrong HTTP method."))
@@ -354,6 +370,8 @@ class DataCollectionConfigPage(ConfigPageMixin, UcollectHandler):
 
 
 class AboutConfigPage(ConfigPageMixin):
+    menu_order = 99
+
     template = "config/about"
     userfriendly_title = gettext("About")
 
@@ -366,7 +384,7 @@ class AboutConfigPage(ConfigPageMixin):
         'unknown': gettext("Unknown status"),
     }
 
-    @require_customization("turris")
+    @require_contract_valid(True)
     def _action_registration_code(self):
         return client.get_registration()
 
@@ -393,7 +411,7 @@ class AboutConfigPage(ConfigPageMixin):
     def render(self, **kwargs):
         stats = client.get(filter=filters.stats).find_child("stats")
         serial = client.get_serial()
-        if DEVICE_CUSTOMIZATION == "omnia":
+        if not contract_valid():
             foris_conf = client.get(filter=filters.create_config_filter("foris"))
             agreed_opt = foris_conf.find_child("uci.foris.eula.agreed_collect")
             kwargs['agreed_collect'] = agreed_opt and bool(int(agreed_opt.value))
@@ -403,18 +421,21 @@ class AboutConfigPage(ConfigPageMixin):
 
 
 class VirtualConfigPage(ConfigPageMixin):
-    def __init__(self, title):
+    def __init__(self, title, menu_order):
         self.userfriendly_title = title
+        self.menu_order = menu_order
 
 
-class ConfigPageMapItems(OrderedDict):
-    pass
+class ConfigPageMapItems(dict):
+    def menu_list(self):
+        res = [(slug, page) for slug, page in self.items()]
+        return sorted(res, key=lambda e: (e[1].menu_order, e[0]))
 
 
 # names of handlers used in their URL
 # use dash-separated names, underscores in URL are ugly
 config_page_map = ConfigPageMapItems((
-    ('', VirtualConfigPage(gettext("Home page"))),
+    ('', VirtualConfigPage(gettext("Home page"), 10)),
     ('password', PasswordConfigPage),
     ('wan', WanConfigPage),
     ('dns', DNSConfigPage),
@@ -427,7 +448,7 @@ config_page_map = ConfigPageMapItems((
     ('about', AboutConfigPage),
 ))
 
-# config pages added by plugins
+# config pages that are not shown in the menu
 extra_config_pages = ConfigPageMapItems()
 
 
@@ -484,8 +505,9 @@ def config_page_post(page_name):
     ConfigPage = get_config_page(page_name)
     config_page = ConfigPage(request.POST)
     if request.is_xhr:
-        # only update is allowed
-        return config_page.render(is_xhr=True)
+        if request.POST.pop("update", None):
+            # if update was requested, just render the page - otherwise handle actions as usual
+            return config_page.render(is_xhr=True)
     try:
         if config_page.save():
             bottle.redirect(request.fullpath)
@@ -515,9 +537,9 @@ def config_action_post(page_name, action):
     ConfigPage = get_config_page(page_name)
     config_page = ConfigPage(request.POST)
     if request.is_xhr:
-        # only update is allowed
-        request.POST.pop("update", None)
-        return config_page.render(is_xhr=True)
+        if request.POST.pop("update", None):
+            # if update was requested, just render the page - otherwise handle actions as usual
+            return config_page.render(is_xhr=True)
     # check if the button click wasn't any sub-action
     subaction = request.POST.pop("action", None)
     if subaction:

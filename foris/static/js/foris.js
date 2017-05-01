@@ -17,18 +17,18 @@
  */
 var Foris = {
   messages: {
-    qrErrorPassword: "Your password contains non-standard characters. These are not forbidden, but could cause problems on some devices.",
-    qrErrorSSID: "Your SSID contains non-standard characters. These are not forbidden, but could cause problems on some devices.",
-    ok: "OK",
-    error: "Error",
-    loading: "Loading...",
-    checkNoForward: "Connectivity test failed, testing connection with disabled forwarding.",
-    lanIpChanged: 'The IP address of your router has been changed. It should be accessible from <a href="%NEW_LOC%">%IP_ADDR%</a>. See the note above for more information about IP address change.',
-    confirmDisabledUpdates: 'You have chosen to not receive security updates. We strongly advice you to keep the automatic security updates enabled to receive all recommended updates for your device. Updating your router on regular basis is the only way how to ensure you will be protected against known threats that might target your home router device.\n\nDo you still want to continue and stay unprotected?',
-    confirmDisabledDNSSEC: 'DNSSEC is a security technology that protects the DNS communication against attacks on the DNS infrastructure. We strongly recommend keeping DNSSEC validation enabled unless you know that you will be connecting your device in the network where DNSSEC is broken.\n\nDo you still want to continue and stay unprotected?',
-    confirmRestart: "Are you sure you want to restart the router?",
-    confirmRestartExtra: "\nRemaining unread messages (%UNREAD%) will be deleted.",
-    unsavedNotificationsAlert: "There are some unsaved changes in the notifications settings.\nDo you want to discard them and test the notifications with the old settings?"
+    qrErrorPassword: "",
+    qrErrorSSID: "",
+    ok: "",
+    error: "",
+    loading: "",
+    checkNoForward: "",
+    lanIpChanged: "",
+    confirmDisabledUpdates: "",
+    confirmDisabledDNSSEC: "",
+    confirmRestart: "",
+    confirmRestartExtra: "",
+    unsavedNotificationsAlert: ""
   }
 };
 
@@ -105,7 +105,7 @@ Foris.initLanChangeDetection = function () {
         // if the value really changed from the default
         if (lanField.defaultValue != lanField.value) {
           var newLocation = document.location.protocol + "//" + lanField.value + Foris.scriptname + "/?next=" + document.location.pathname;
-          $(".config-description, .wizard-description").after('<div class="message info">' + Foris.messages.lanIpChanged.replace(/%IP_ADDR%/g, lanField.value).replace(/%NEW_LOC%/g, newLocation) + '</div>');
+          $(".config-description, .wizard-description").after('<div class="message info">' + Foris.messages.lanIpChanged.replace(/%NEW_IP_LINK%/g, '<a href="' + newLocation + '">' + lanField.value + '</a>') + '</div>');
           // if the page was accessed from the old IP address, wait 10 seconds and do a redirect
           window.setTimeout(function () {
             if (lanField.defaultValue == document.location.hostname) {
@@ -158,6 +158,8 @@ Foris.applySVGFallback = function() {
 
 Foris.updateForm = function (form) {
   var serialized = form.serializeArray();
+  serialized.push({name: 'update', value: '1'});
+
   var idSelector = form.attr("id") ? " #" + form.attr("id") : "";
   form.load(form.attr("action") + idSelector, serialized, function (response, status, xhr) {
     try {
@@ -313,16 +315,14 @@ Foris.checkUpdaterStatus = function (retries, pageNumber) {
 
   Foris.callAjaxAction(pageNumber, "updater_status", 3000)
       .done(function (data) {
+        var progressContainer = $("#updater-progress");
+        progressContainer.show();
         retries = 0;  // reset retries in case of success
         if (data.success === false) {
-          if (data.loggedOut && data.loggedOut === true) {
-            $("#updater-progress").hide();
-            $("#updater-login").show();
-          }
           return;
         }
         if (data.status == "failed") {
-          $("#updater-progress").hide();
+          progressContainer.hide();
           Foris.showUpdaterFail(data);
         }
         else if (data.status == "running") {
@@ -360,11 +360,11 @@ Foris.checkUpdaterStatus = function (retries, pageNumber) {
           }, 1000);
         }
         else if (data.status == "done") {
-          $("#updater-progress").hide();
+          progressContainer.hide();
           $("#updater-success").show();
         }
       })
-      .fail(function () {
+      .fail(function (xhr) {
         // try multiple times (in one-second retries) in case the server is restarting
         if (retries < maxRetries) {
           retries += 1;
@@ -374,7 +374,11 @@ Foris.checkUpdaterStatus = function (retries, pageNumber) {
         }
         else {
           $("#updater-progress").hide();
-          Foris.showUpdaterFail();
+          if (xhr.responseJSON && xhr.responseJSON.loggedOut && xhr.responseJSON.loginUrl) {
+            $("#updater-login").show();
+          } else {
+            Foris.showUpdaterFail();
+          }
         }
       })
 };

@@ -9,12 +9,18 @@ def main():
 
     main_app = prepare_main_app(args)
 
+    if args.routes:
+        # routes should be printed and we can safely exit
+        return True
+
     # run the right server
     if args.server == "wsgiref":
         bottle.run(app=main_app, host=args.host, port=args.port, debug=args.debug)
     elif args.server == "flup":
         # bindAddress is None - FCGI process must be spawned by the server
         bottle.run(app=main_app, server="flup", debug=args.debug, bindAddress=None)
+    elif args.server == "cgi":
+        bottle.run(app=main_app, server="cgi", debug=args.debug)
 
 
 if __name__ == "__main__":

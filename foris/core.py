@@ -16,9 +16,13 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 # builtins
+import collections
 import gettext
+import hashlib
 import logging
 import os
+import re
+import time
 
 # 3rd party
 from beaker.middleware import SessionMiddleware
@@ -27,43 +31,47 @@ from bottle_i18n import I18NMiddleware, I18NPlugin, i18n_defaults
 from ncclient.operations import TimeoutExpiredError, RPCError
 
 # local
-from .nuci import client, filters
+from . import __version__ as foris_version
+from .nuci import client, filters, cache
 from .nuci.modules.uci_raw import Uci, Config, Section, Option
 from .nuci.modules.user_notify import Severity
+from .langs import iso2to3, translation_names, translations, DEFAULT_LANGUAGE
 from .plugins import ForisPluginLoader
 from .utils import redirect_unauthenticated, is_safe_redirect, is_user_authenticated
 from .utils.bottle_csrf import get_csrf_token, update_csrf_token, CSRFValidationError, CSRFPlugin
-from .utils import DEVICE_CUSTOMIZATION, messages
+from .utils import DEVICE_CUSTOMIZATION, messages, contract_valid
 from .utils.reporting_middleware import ReportingMiddleware
-from .utils.routing import reverse
+from .utils.routing import reverse, static
 
 
 logger = logging.getLogger("foris")
 
 BASE_DIR = os.path.dirname(__file__)
 
+# init cache
+nuci_cache = cache.NuciCache()
+
 # internationalization
 i18n_defaults(bottle.SimpleTemplate, bottle.request)
-DEFAULT_LANGUAGE = 'en'
-translations = {
-    'cs': gettext.translation("messages", os.path.join(BASE_DIR, "locale"),
-                              languages=['cs'], fallback=True),
-    'de': gettext.translation("messages", os.path.join(BASE_DIR, "locale"),
-                              languages=['de'], fallback=True),
-    'en': gettext.translation("messages", os.path.join(BASE_DIR, "locale"),
-                              languages=['en'], fallback=True),
-}
-translation_names = {
-    'cs': "Česky",
-    'de': "Deutsch",
-    'en': "English",
-}
+
+# read locale directory
+locale_directory = os.path.join(BASE_DIR, "locale")
+
+translations = collections.OrderedDict(
+    (e, gettext.translation("messages", locale_directory, languages=[e], fallback=True))
+    for e in translations
+)
+
 ugettext = lambda x: translations[bottle.request.app.lang].ugettext(x)
 ungettext = lambda singular, plural, n: translations[bottle.request.app.lang].ungettext(singular, plural, n)
 bottle.SimpleTemplate.defaults['trans'] = lambda msgid: ugettext(msgid)  # workaround
 bottle.SimpleTemplate.defaults['translation_names'] = translation_names
+bottle.SimpleTemplate.defaults['translations'] = [e for e in translations]
+bottle.SimpleTemplate.defaults['iso2to3'] = iso2to3
 bottle.SimpleTemplate.defaults['ungettext'] = lambda singular, plural, n: ungettext(singular, plural, n)
 bottle.SimpleTemplate.defaults['DEVICE_CUSTOMIZATION'] = DEVICE_CUSTOMIZATION
+bottle.SimpleTemplate.defaults['contract_valid'] = contract_valid
+bottle.SimpleTemplate.defaults['foris_version'] = foris_version
 gettext_dummy = lambda x: x
 _ = ugettext
 
@@ -74,11 +82,45 @@ bottle.SimpleTemplate.defaults["user_authenticated"] =\
     lambda: bottle.request.environ["beaker.session"].get("user_authenticated")
 bottle.SimpleTemplate.defaults["request"] = bottle.request
 bottle.SimpleTemplate.defaults["url"] = lambda name, **kwargs: reverse(name, **kwargs)
-bottle.SimpleTemplate.defaults["static"] = lambda filename, *args: reverse("static", filename=filename.replace("%LANG%", bottle.request.app.lang)) % args
+bottle.SimpleTemplate.defaults["static"] = static
 bottle.SimpleTemplate.defaults["get_csrf_token"] = get_csrf_token
 
 # messages
 messages.set_template_defaults(bottle.SimpleTemplate)
+
+
+def route_list(app, prefix1="", prefix2=""):
+    res = []
+    for route in app.routes:
+        path1 = prefix1 + route.rule
+        path2 = prefix2
+        for name, filter, token in app.router._itertokens(route.rule):
+            if not filter:
+                # simple token
+                path2 += name
+            elif filter == 're':
+                # insert regexp
+                path2 += token
+
+        if route.method == 'PROXY':
+            res += route_list(route.config['mountpoint.target'], prefix1=path1, prefix2=path2)
+        else:
+            res.append((route.method, path1, path2))
+    return res
+
+
+def route_list_debug(app):
+    res = []
+    for method, bottle_path, regex_path in route_list(app):
+        res.append("%s %s" % (method, bottle_path))
+    return res
+
+
+def route_list_cmdline(app):
+    res = []
+    for method, bottle_path, regex_path in route_list(app):
+        res.append(regex_path)
+    return res
 
 
 def login_redirect(step_num, wizard_finished=False):
@@ -114,6 +156,47 @@ def index():
 
     return dict(luci_path="//%(host)s/%(path)s"
                           % {'host': bottle.request.get_header('host'), 'path': 'cgi-bin/luci'})
+
+
+def render_js(filename):
+    """ Render javascript template to insert a translation
+        :param filename: name of the file to be translated
+    """
+
+    headers = {}
+
+    # check the template file
+    path = bottle.SimpleTemplate.search("javascript/%s" % filename, bottle.TEMPLATE_PATH)
+    if not path:
+        return bottle.HTTPError(404, "File does not exist.")
+
+    # test last modification date (mostly copied from bottle.py)
+    stats = os.stat(path)
+    lm = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(stats.st_mtime))
+    headers['Last-Modified'] = lm
+
+    ims = bottle.request.environ.get('HTTP_IF_MODIFIED_SINCE')
+    if ims:
+        ims = bottle.parse_date(ims.split(";")[0].strip())
+    if ims is not None and ims >= int(stats.st_mtime):
+        headers['Date'] = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
+        return bottle.HTTPResponse(status=304, **bottle.response.headers)
+
+    # set the content type to javascript
+    headers['Content-Type'] = "application/javascript; charset=UTF-8"
+
+    body = bottle.template("javascript/%s" % filename)
+    # TODO if you are sadistic enough you can try to minify the content
+
+    return bottle.HTTPResponse(body, **headers)
+
+
+def render_js_md5(filename):
+    # calculate the hash of the rendered template
+    return hashlib.md5(bottle.template("javascript/%s" % filename).encode('utf-8')).hexdigest()
+
+
+bottle.SimpleTemplate.defaults['js_md5'] = lambda filename: render_js_md5(filename)
 
 
 def change_lang(lang):
@@ -183,6 +266,11 @@ def login():
         session.save()
         if next and is_safe_redirect(next, bottle.request.get_header('host')):
             bottle.redirect(next)
+
+        # update contract status
+        client.update_contract_status()
+        nuci_cache.invalidate("foris.contract")
+
     else:
         messages.error(_("The password you entered was not valid."))
 
@@ -201,8 +289,25 @@ def logout():
 
 
 def static(filename):
+    """ return static file
+    :param filename: url path
+    :type filename: str
+    :return: http response
+    """
+
     if not bottle.DEBUG:
         logger.warning("Static files should be handled externally in production mode.")
+
+    match = re.match(r'/*plugins/+(\w+)/+(.+)', filename)
+    if match:
+        plugin_name, plugin_file = match.groups()
+
+        # find correspoding plugin
+        for plugin in bottle.app().foris_plugin_loader.plugins:
+            if plugin.PLUGIN_NAME == plugin_name:
+                return bottle.static_file(
+                    plugin_file, root=os.path.join(plugin.DIRNAME, "static"))
+
     return bottle.static_file(filename, root=os.path.join(os.path.dirname(__file__), "static"))
 
 
@@ -282,7 +387,7 @@ def init_foris_app(app, prefix):
     :param app: instance of bottle application to mount
     :param prefix: prefix which has been used to mount the application
     """
-    app.catchall = False  # caught by LoggingMiddleware
+    app.catchall = False  # caught by ReportingMiddleware
     app.error_handler[403] = foris_403_handler
     app.add_hook('after_request', clickjacking_protection)
     app.add_hook('after_request', disable_caching)
@@ -297,20 +402,30 @@ def get_arg_parser():
     """
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("-H", "--host", default="0.0.0.0")
-    parser.add_argument("-p", "--port", type=int, default=8080)
-    parser.add_argument("-s", "--server", choices=["wsgiref", "flup"], default="wsgiref")
-    parser.add_argument("-d", "--debug", action="store_true")
-    parser.add_argument("--noauth", action="store_true",
-                        help="disable authentication (available only in debug mode)")
-    parser.add_argument("--nucipath", help="path to Nuci binary")
+    group = parser.add_argument_group("run server")
+    group.add_argument("-H", "--host", default="0.0.0.0")
+    group.add_argument("-p", "--port", type=int, default=8080)
+    group.add_argument("--session-timeout", type=int, default=900,
+                       help="session timeout (in seconds)")
+    group.add_argument("-s", "--server", choices=["wsgiref", "flup", "cgi"], default="wsgiref")
+    group.add_argument("-d", "--debug", action="store_true")
+    group.add_argument("--noauth", action="store_true",
+                       help="disable authentication (available only in debug mode)")
+    group.add_argument("--nucipath", help="path to Nuci binary")
+    parser.add_argument("-R", "--routes", action="store_true", help="print routes and exit")
+    group.add_argument(
+        "-S", "--static", action="store_true",
+        help="serve static files directly through foris app (should be used for debug only)"
+    )
     return parser
 
 
-def init_default_app():
+def init_default_app(include_static=False):
     """
     Initialize top-level Foris app - register all routes etc.
 
+    :param include_static: include route to static files
+    :type include_static: bool
     :return: instance of Foris Bottle application
     """
 
@@ -320,7 +435,9 @@ def init_default_app():
     app.route("/lang/<lang:re:\w{2}>", name="change_lang", callback=change_lang)
     app.route("/", method="POST", name="login", callback=login)
     app.route("/logout", name="logout", callback=logout)
-    app.route('/static/<filename:re:.*>', name="static", callback=static)
+    if include_static:
+        app.route('/static/<filename:re:.*>', name="static", callback=static)
+    app.route("/js/<filename:re:.*>", name="render_js", callback=render_js)
     return app
 
 
@@ -332,7 +449,7 @@ def prepare_main_app(args):
     :param args: arguments received from ArgumentParser.parse_args().
     :return: bottle.app() for Foris
     """
-    app = init_default_app()
+    app = init_default_app(args.static)
 
     # basic and bottle settings
     template_dir = os.path.join(BASE_DIR, "templates")
@@ -368,24 +485,30 @@ def prepare_main_app(args):
     loader = ForisPluginLoader(app)
     loader.autoload_plugins()
 
+    # print routes to console and exit
+    if args.routes:
+        routes = route_list_cmdline(app)
+        print("\n".join(sorted(set(routes))))
+        return app
+
+    # print routes in debug mode
+    if args.debug:
+        routes = route_list_debug(app)
+        logger.debug("Routes:\n%s", "\n".join(routes))
+
     # read language saved in Uci
     lang = read_uci_lang(DEFAULT_LANGUAGE)
     # i18n middleware
     if lang not in translations:
         lang = DEFAULT_LANGUAGE
-    app = I18NMiddleware(app, I18NPlugin(domain="messages", lang_code=lang, default=DEFAULT_LANGUAGE, locale_dir=os.path.join(BASE_DIR, "locale")))
+    app = I18NMiddleware(app, I18NPlugin(
+        domain="messages", lang_code=lang, default=DEFAULT_LANGUAGE,
+        locale_dir=os.path.join(BASE_DIR, "locale")
+    ))
 
-    # logging middleware for all mounted apps
+    # reporting middleware for all mounted apps
     app = ReportingMiddleware(app, sensitive_params=("key", "pass", "*password*"))
     app.install_dump_route(bottle.app())
-
-    if args.debug:
-        # for nice debugging and profiling, try importing FireLogger support
-        try:
-            from firepython.middleware import FirePythonWSGI
-            app = FirePythonWSGI(app)
-        except ImportError:
-            FirePythonWSGI = None
 
     # session middleware (note: session.auto does not work within Bottle)
     session_options = {
@@ -393,7 +516,7 @@ def prepare_main_app(args):
         'session.data_dir': '/tmp/beaker/data',
         'session.lock_dir': '/tmp/beaker/lock',
         'session.cookie_expires': True,
-        'session.timeout': 900,
+        'session.timeout': args.session_timeout,
         'session.auto': True,
         'session.httponly': True,
     }

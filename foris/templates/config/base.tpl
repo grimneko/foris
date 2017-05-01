@@ -18,7 +18,12 @@
     %rebase("_layout.tpl", **locals())
     <div id="header">
         <div class="sidebar-content">
-            <a href="{{ url("config_index") }}"><img src="{{ static("img/logo-turris.svg") }}" alt="{{ trans("Foris - administration interface of router Turris") }}" class="header-side" height="65"></a>
+            <a href="{{ url("config_index") }}">
+                <img src="{{ static("img/logo-turris.svg") }}" alt="{{ trans("Foris - administration interface of router Turris") }}" class="header-side" height="65">
+            </a>
+            <div class="config-foris-version">
+                %include("_foris_version.tpl")
+            </div>
             <div class="header-top">
               <a href="#menu" class="menu-link"><img src="{{ static("img/icon-menu.png") }}" alt="{{ trans("Menu") }}" title="{{ trans("Menu") }}"></a>
               <a href="{{ url("config_index") }}"><img src="{{ static("img/logo-turris.svg") }}" alt="{{ trans("Foris - administration interface of router Turris") }}" height="50"></a>
@@ -37,7 +42,7 @@
         <div class="sidebar-content">
             <nav>
                 <ul>
-                %for slug, config_page in config_pages.iteritems():
+                %for slug, config_page in config_pages.menu_list():
                     <li{{! ' class="active"' if defined("active_config_page_key") and slug == active_config_page_key else "" }}>
                       <a href="{{ url("config_page", page_name=slug) }}">{{ trans(config_page.userfriendly_title) }}</a>
                     </li>
@@ -50,11 +55,11 @@
                 <a href="{{ url("logout") }}">{{ trans("Log out") }}</a>
               </div>
               <div id="language-switch">
-                <span>{{ translation_names[lang()] }}</span>
+                <span>{{ translation_names.get(lang(), lang()) }}</span>
                 <ul>
-                  %for code, name in translation_names.iteritems():
+                  %for code in translations:
                     %if code != lang():
-                      <li><a href="{{ url("change_lang", lang=code, backlink=request.fullpath) }}">{{ name }}</a></li>
+                      <li><a href="{{ url("change_lang", lang=code, backlink=request.fullpath) }}">{{ translation_names.get(code, code) }}</a></li>
                     %end
                   %end
                 </ul>
